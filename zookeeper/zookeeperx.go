@@ -1,14 +1,14 @@
 package zookeeper
 
 import (
-	"github.com/samuel/go-zookeeper/zk"
-	"log"
-	"time"
-	"fmt"
-	"os"
 	"bufio"
+	"fmt"
+	"github.com/samuel/go-zookeeper/zk"
 	"io"
+	"log"
+	"os"
 	"strings"
+	"time"
 )
 
 type ZkNode struct {
@@ -157,8 +157,8 @@ func (node ZkNode) getValue(conn *zk.Conn) (string, int32) {
 	return value, stat.Version
 }
 
-func Export(root string, exportPath string) {
-	connection, _, _ := zk.Connect([]string{"127.0.0.1"}, time.Second) //*10)
+func Export(zkAddress, root, exportPath string) {
+	connection, _, _ := zk.Connect([]string{zkAddress}, time.Second) //*10)
 	defer connection.Close()
 
 	rootNode := ZkNode{path: root}
