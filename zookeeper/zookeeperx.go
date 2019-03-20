@@ -18,22 +18,16 @@ type ZkNode struct {
 	leaf    bool
 }
 
-func (node ZkNode) Update(conn *zk.Conn) {
-	log.Printf("update node:%v", node)
-	_, err := conn.Set(node.path, []byte(node.value), node.version+1)
-	if err != nil {
-		log.Println("failed to update;", err)
-	}
-}
-func (node ZkNode) exist(conn *zk.Conn) bool {
-	exist, _, _ := conn.Exists(node.path)
+func (node *ZkNode) exist(conn *zk.Conn) bool {
+	exist, stat, _ := conn.Exists(node.path)
+	node.version = stat.Version
 	return exist
 }
-func (node ZkNode) isRoot() bool {
+func (node *ZkNode) isRoot() bool {
 	return strings.LastIndex(node.path, "/") == 0
 }
-func Delete(path string) {
-	connection, _, _ := zk.Connect([]string{"127.0.0.1"}, time.Second) //*10)
+func Delete(zkAddress, path string) {
+	connection, _, _ := zk.Connect([]string{zkAddress}, time.Second) //*10)
 	defer connection.Close()
 
 	node := ZkNode{path: path}
@@ -45,7 +39,7 @@ func Delete(path string) {
 	_, node.version = node.getValue(connection)
 
 	children := node.getChildren(connection)
-	GetValue(children)
+	GetValue(zkAddress, children)
 
 	for len(children) > 0 {
 		for k, v := range children {
@@ -59,9 +53,9 @@ func Delete(path string) {
 	node.Delete(connection)
 }
 
-func GetValue(nodes map[string]ZkNode) {
+func GetValue(zkAddress string, nodes map[string]ZkNode) {
 	log.Println("get value:", nodes)
-	connection, _, _ := zk.Connect([]string{"127.0.0.1"}, time.Second) //*10)
+	connection, _, _ := zk.Connect([]string{zkAddress}, time.Second) //*10)
 	defer connection.Close()
 
 	for k, v := range nodes {
@@ -70,7 +64,7 @@ func GetValue(nodes map[string]ZkNode) {
 	}
 }
 
-func (node ZkNode) Delete(conn *zk.Conn) {
+func (node *ZkNode) Delete(conn *zk.Conn) {
 	log.Println("deleting node:", node)
 	err := conn.Delete(node.path, node.version)
 	if err != nil {
@@ -80,34 +74,40 @@ func (node ZkNode) Delete(conn *zk.Conn) {
 
 }
 
-func (node ZkNode) CreateNode(conn *zk.Conn) {
-	log.Println("creating node:", node)
+func (node *ZkNode) SetNode(conn *zk.Conn) {
+	log.Println("set node:", node)
 
 	if node.exist(conn) {
-		node.Update(conn)
-		log.Println("node exist,update value:", node)
+		log.Printf("update node, path: %v, value: %v, version: %v",
+			node.path, node.value, node.version)
+
+		_, err := conn.Set(node.path, []byte(node.value), node.version)
+		if err != nil {
+			log.Println("failed to update, path:"+node.path+", err:", err)
+		}
+
 	} else {
 		index := strings.LastIndex(node.path, "/")
 		if index > 0 {
 			parentNode := ZkNode{path: node.path[0:index]}
 			if !parentNode.exist(conn) {
-				parentNode.CreateNode(conn)
+				parentNode.SetNode(conn)
 			}
-			conn.Create(node.path, []byte(node.value), 0, zk.WorldACL(zk.PermAll))
+			_, _ = conn.Create(node.path, []byte(node.value), 0, zk.WorldACL(zk.PermAll))
 			log.Println("create node:", node)
 
 		} else {
-			conn.Create(node.path, []byte(node.value), 0, zk.WorldACL(zk.PermAll))
+			_, _ = conn.Create(node.path, []byte(node.value), 0, zk.WorldACL(zk.PermAll))
 		}
 	}
 
 }
 
-func (node ZkNode) toString() string {
+func (node *ZkNode) toString() string {
 	return node.path + "=" + node.value
 }
 
-func (node ZkNode) hasChildren(conn *zk.Conn) bool {
+func (node *ZkNode) hasChildren(conn *zk.Conn) bool {
 	children, _, err := conn.Children(node.path)
 	if err != nil {
 		panic(err)
@@ -115,7 +115,7 @@ func (node ZkNode) hasChildren(conn *zk.Conn) bool {
 	return !(len(children) == 0)
 }
 
-func (node ZkNode) getChildren(conn *zk.Conn) map[string]ZkNode {
+func (node *ZkNode) getChildren(conn *zk.Conn) map[string]ZkNode {
 	parentPath := node.path
 	log.Println("get children, path", node)
 	children, _, err := conn.Children(parentPath)
@@ -142,18 +142,18 @@ func (node ZkNode) getChildren(conn *zk.Conn) map[string]ZkNode {
 
 	} else if !node.isRoot() {
 		node.leaf = true
-		nodes[node.path] = node
+		nodes[node.path] = *node
 		log.Println("collect child node:", node)
 	}
 	log.Printf("%v children:%v", parentPath, nodes)
 	return nodes
 }
 
-func (node ZkNode) getValue(conn *zk.Conn) (string, int32) {
+func (node *ZkNode) getValue(conn *zk.Conn) (string, int32) {
 	b, stat, _ := conn.Get(node.path)
 	value := string(b)
 
-	log.Printf("get value:%v,stat:%v", value, stat)
+	log.Printf("get value, key: %v, value: %v, version: %v", node.path, value, stat.Version)
 	return value, stat.Version
 }
 
@@ -168,7 +168,7 @@ func Export(zkAddress, root, exportPath string) {
 	}
 
 	children := rootNode.getChildren(connection)
-	GetValue(children)
+	GetValue(zkAddress, children)
 
 	file, err := os.Create(exportPath)
 	defer file.Close()
@@ -184,11 +184,11 @@ func Export(zkAddress, root, exportPath string) {
 		}
 	}
 
-	file.Sync()
+	_ = file.Sync()
 }
 
-func ImportFromFile(filePath string, parentPath string) {
-	connection, _, _ := zk.Connect([]string{"127.0.0.1"}, time.Second) //*10)
+func ImportFromFile(zkAddress, filePath, parentPath string) {
+	connection, _, _ := zk.Connect([]string{zkAddress}, time.Second) //*10)
 	defer connection.Close()
 
 	fi, err := os.Open(filePath)
@@ -212,7 +212,7 @@ func ImportFromFile(filePath string, parentPath string) {
 		keyIndex := strings.Index(line, "=")
 		path := parentPath + line[0:keyIndex]
 		node := ZkNode{path: path, value: line[keyIndex+1:]}
-		node.CreateNode(connection)
+		node.SetNode(connection)
 
 	}
 }
